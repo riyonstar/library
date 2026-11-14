@@ -24,15 +24,14 @@
 | `config.js` | `BACKEND_URL` と公開鍵(秘密情報は置かない) |
 | `books.json` | くもん推薦図書650冊(書名・検索用書名・著者・出版社・レベル) |
 | `libraries.json` | 図書館ごとの設定(追加はここに1件足すだけ) |
-| `data.js` | 上2つをまとめたもの(`file://`で開けるように。`node build-data.mjs`で再生成) |
+| `data.js` | 上2つをまとめたもの(index.html を直接開く場合用。公開時は JSON を直接読むので更新不要) |
 | `manifest.json` / `service-worker.js` | PWA(ホーム画面追加・オフライン・Push受信) |
 | `icon-*.png` / `apple-touch-icon.png` | アイコン(`make-icons.py`で生成) |
 | `worker.js` / `wrangler.toml` | バックエンド(Cloudflare Workers・無料) |
-| `generate-vapid.mjs` | Web Push用の鍵作成 |
-| `SECRETS.md` | **APIキーの置き場所と設定方法(まず読む)** |
-| `check-secrets.mjs` | 秘密情報の直書きチェック |
-| `.dev.vars.example` | ローカル用の秘密情報の雛形(実際の `.dev.vars` はコミット禁止) |
-| `.github/workflows/deploy-worker.yml` | GitHub Secrets を使ったWorkerの自動デプロイ(GitHubの仕様上このフォルダ必須) |
+| `IPHONE-SETUP.md` | **iPhoneだけで公開・設定する手順(まず読む)** |
+| `SECRETS.md` | 秘密情報の置き場所の一覧 |
+| `check-secrets.mjs` | 秘密情報の直書きチェック(GitHub Actionsが自動実行。手元実行は不要) |
+| `workflow-*.yml.txt` | GitHub Actions の設定(GitHubの画面で `.github/workflows/` に貼り付けて作る) |
 | `test-worker.mjs` | バックエンドの単体テスト(`node test-worker.mjs`) |
 
 ## 使い方
@@ -55,15 +54,7 @@ iPhone(GitHub Pages上のPWA) → Cloudflare Worker → カーリル図書館API
 - 図書館への負荷: 画面からの照会は10分キャッシュ、強制更新でも同じ本は2分に1回まで。定期チェックは毎時1回、お気に入りの本だけ(複数ユーザーでも重複排除)。
 
 ### 公開手順(すべて無料枠)
-**APIキーの扱いは `SECRETS.md` を参照**(チャット・ファイルには書かず、GitHub Secrets または `wrangler secret put` で登録)。以下は手元コマンドで行う場合の流れです。
-1. GitHubにこのフォルダの中身をそのまま置き、Settings → Pages で公開(ブランチのルート)。
-2. カーリルのAPIキーを取得(https://calil.jp/doc/api_ref.html )。利用条件も確認してください。
-3. `npm i -g wrangler`(または `npx wrangler`)→ `npx wrangler login`
-4. `npx wrangler kv namespace create KV` で出たIDを `wrangler.toml` に記入。`ALLOWED_ORIGIN` `BOOKS_URL` `LIBRARIES_URL` `VAPID_SUBJECT` も自分の値に。
-5. `node generate-vapid.mjs` で鍵を作成。公開鍵を `wrangler.toml` と `config.js` に、秘密鍵は `npx wrangler secret put VAPID_PRIVATE_KEY` で登録(**コミット禁止**)。
-6. `npx wrangler secret put CALIL_APPKEY`
-7. `npx wrangler deploy` → 表示されたURLを `config.js` の `BACKEND_URL` に記入して再アップロード。
-8. **館名の照合確認(必須)**: `https://<worker>/api/health` を開き、`libraryMatch` で2館の `matchedAlias` が入っているか確認。`null` のままなら、一度検索した後に `learnedLibkeys` に出る実際の館名を `libraries.json` の `calil.libkeys` に追記します。照合できない間は「不明」と表示し、誤って「貸出中」「蔵書なし」とは表示しません。
+**`IPHONE-SETUP.md` を参照してください**(ターミナル不要)。APIキーは Cloudflare の画面にだけ入力し、GitHubには置きません。Web Push の鍵は Worker が自動生成します。
 
 ## お気に入り・履歴・変化検知
 - お気に入りは端末の localStorage に保存(`Favorite {bookId, addedAt}`。将来のクラウド同期に備えた形)。
@@ -77,7 +68,7 @@ iPhone(GitHub Pages上のPWA) → Cloudflare Worker → カーリル図書館API
 - 追加費用なし(Cloudflare・GitHub Pagesの無料枠)。LINE通知は含めていません。
 
 ## 図書館を追加する
-`libraries.json` に1件足して `enabled: true` にし、`node build-data.mjs` を実行。赤羽・滝野川・田端は `enabled:false` で登録済みです。
+`libraries.json` に1件足して `enabled: true` にするだけです(GitHubの画面で編集可)。赤羽・滝野川・田端は `enabled:false` で登録済みです。
 
 ## 未実装・要確認
 - 実際のカーリルAPI・北区への接続は、APIキーがなく**未検証**。

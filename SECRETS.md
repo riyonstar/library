@@ -1,46 +1,29 @@
-# APIキー・秘密情報の置き場所と設定方法
+# 秘密情報の置き場所(まとめ)
 
-## 原則
-- **APIキーをチャット・コード・GitHubのファイルに書かない。** GitHub Pages(フロントエンド)は全部公開されるので、キーは必ずバックエンド(Cloudflare Worker)側にだけ置く。
-- ブラウザ(`app.js`)はキーを一切持たず、Worker の `/api/...` を呼ぶだけ。Worker がキーを付けてカーリルへ問い合わせる。
+手順は **IPHONE-SETUP.md**(iPhoneだけで完結)を見てください。ここは「何をどこに置くか」の一覧です。
+
+| 値 | 秘密? | 置き場所 |
+|---|---|---|
+| `CALIL_APPKEY`(カーリルのAPIキー) | **秘密** | **Cloudflareの画面(Worker → Settings → Variables and Secrets → Secret)だけ**。GitHubには置かない |
+| Web Pushの秘密鍵 | **秘密** | Worker が初回に自動生成し、Cloudflare KVにだけ保存。人は扱わない |
+| `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | **秘密** | GitHub Secrets だけ(デプロイ用) |
+| `BACKEND_URL`、`ALLOWED_ORIGIN`、`BOOKS_URL`、KVのID | 公開OK | `config.js` / `wrangler.toml` |
 
 ```
 iPhone/PWA(キーなし) → Worker(キーを保持) → カーリルAPI
 ```
 
-## どの値をどこに置くか
+## 守ること
+- キーは **Cloudflareの入力欄以外に貼らない**(チャット・GitHubのファイル・コメント・Issueも不可)。
+- 最初は **Privateリポジトリ**で始め、`check`(自動チェック)が緑になってから Public にする。
+- 万一貼ってしまったら、カーリルのキーを**再発行**してCloudflareのSecretを差し替える(Gitの履歴から消しても、一度公開されたものは安全とは言えません)。
 
-| 値 | 秘密? | 置き場所 |
-|---|---|---|
-| `CALIL_APPKEY`(カーリルのAPIキー) | **秘密** | GitHub Secrets / Cloudflareのシークレット / ローカルは `.dev.vars` |
-| `VAPID_PRIVATE_KEY`(Push秘密鍵) | **秘密** | 同上 |
-| `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | **秘密** | GitHub Secrets のみ |
-| `VAPID_PUBLIC_KEY`(Push公開鍵) | 公開OK | `wrangler.toml` と `config.js` |
-| `BACKEND_URL`、`ALLOWED_ORIGIN`、`BOOKS_URL` など | 公開OK | `config.js` / `wrangler.toml` |
+## 自動チェックについて
+- `check.yml`(`workflow-check.yml.txt` の内容)が push のたびに `check-secrets.mjs` を実行します。手元での実行は不要です。
+- 検査は push の**後**に走るため、公開後の貼り間違いは「防止」ではなく「検知」です。
+- ログには場所(ファイル名・行番号)だけが出て、値は出力されません。
 
-## 設定方法A: GitHub Secrets 経由(おすすめ・自動デプロイ)
-1. GitHubのリポジトリ → Settings → Secrets and variables → Actions → New repository secret で次の4つを登録(値は画面に直接入力。チャットには貼らない)。
-   - `CALIL_APPKEY` / `VAPID_PRIVATE_KEY` / `CLOUDFLARE_API_TOKEN`(権限は「Edit Cloudflare Workers」テンプレート) / `CLOUDFLARE_ACCOUNT_ID`
-2. `wrangler.toml` の公開してよい値(KV ID、`ALLOWED_ORIGIN`、`BOOKS_URL`、`LIBRARIES_URL`、`VAPID_PUBLIC_KEY`)を自分の値にする。
-3. Actions タブ → `deploy-worker` → Run workflow。実行時に秘密の直書きチェックとテストが走り、通れば Worker をデプロイして2つのシークレットを Cloudflare に登録する。
-4. 表示された Worker のURLを `config.js` の `BACKEND_URL` に書いて push。
-
-## 設定方法B: 手元のコマンド(GitHubを使わない)
-```
-npx wrangler login
-npx wrangler secret put CALIL_APPKEY        # 入力プロンプトに貼り付け(履歴に残らない)
-npx wrangler secret put VAPID_PRIVATE_KEY
-npx wrangler deploy
-```
-
-## ローカルでの試験
-`.dev.vars.example` を `.dev.vars` にコピーして値を入れ、`npx wrangler dev`。`.dev.vars` は `.gitignore` 済み。
-
-## 漏えい防止
-- push の前に `node check-secrets.mjs`(キーの直書きを検出。Actionsでも自動実行)。
-- 万一キーを貼ってしまったら、**カーリルのキーを再発行**し、GitHub Secrets を差し替える(Git履歴からは消えないため、再発行が確実)。
-- アプリはキーを localStorage にも保存しない。
-
-## APIキーなしで今できること / キー設定後にできること
-- **今できる**: 全画面、検索、お気に入り、履歴・変化検知、アプリ内通知(モックデータ)。バックエンドをデプロイすれば、キー未設定でも書名→ISBN解決と推薦図書以外の検索(NDLサーチ)は動く。在架状況は「⚪不明(APIキー未設定)」と表示し、貸出中とは表示しない。
-- **キー設定後**: カーリル経由の実際の在架・貸出中、定期チェック、Web Push通知。設定確認は `https://<worker>/api/health` の `config.calilKey` が `true` になること。
+## キー未登録でも動くこと
+- 画面、検索、お気に入り、履歴・変化検知、アプリ内通知(モック)。
+- Worker をデプロイすれば、書名→ISBN解決と推薦図書以外の検索も動く。
+- 在架状況は「⚪不明(APIキー未設定)」と表示し、貸出中とは表示しない。

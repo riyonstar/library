@@ -107,6 +107,24 @@ await t('JWTがES256で正しく署名される(公開鍵で検証)', async () =
   assert.equal(ok, true);
 });
 
+console.log('■ VAPID鍵の自動生成(秘密鍵はKVにだけ保存)');
+await t('初回に生成→KVに保存→2回目は同じ鍵・公開鍵APIから取得できる・環境変数不要', async () => {
+  const env = { KV: new MemKV(), ALLOWED_ORIGIN: 'https://me.github.io' };
+  const ctx = { env };
+  assert.equal(await W.getVapid(ctx, { create: false }), null);
+  const a = await W.getVapid(ctx);
+  const b = await W.getVapid(ctx);
+  assert.equal(a.pub, b.pub); assert.equal(a.priv, b.priv);
+  assert.equal(W.b64urlDecode(a.pub).length, 65);
+  const jwt = await W.vapidJwt({ VAPID_PUBLIC_KEY: a.pub, VAPID_PRIVATE_KEY: a.priv }, 'https://web.push.apple.com');
+  assert.equal(jwt.split('.').length, 3);
+  const res = await W.route(new Request('https://w.example/api/vapid-public-key', { headers: { Origin: 'https://me.github.io' } }), env, {});
+  assert.equal((await res.json()).key, a.pub);
+  const h = await (await W.route(new Request('https://w.example/api/health'), { ...env, BOOKS_URL: 'x', LIBRARIES_URL: 'x' }, {})).json();
+  assert.equal(h.config.vapid, true);
+  assert.ok(!JSON.stringify(h).includes(a.priv), '秘密鍵が応答に含まれてはいけない');
+});
+
 console.log('■ API(カーリルをモックして end-to-end)');
 function makeEnv(extra = {}) {
   return { KV: new MemKV(), CALIL_APPKEY: 'SECRET_KEY_123', ALLOWED_ORIGIN: 'https://me.github.io', BOOKS_URL: 'https://x/books.json', LIBRARIES_URL: 'https://x/libraries.json', ...extra };
@@ -157,7 +175,7 @@ await t('在架/貸出中の取得 + APIキーが応答・エラーに出ない 
 
 await t('上流が落ちたら必ず不明(貸出中にしない)・エラーにキーが出ない', async () => {
   const env = makeEnv();
-  const handlers = [...staticHandlers(), [/ndlsearch/, () => new Response(sampleXml)], [/api\.calil\.jp/, () => new Response('boom', { status: 503 })]];
+  const handlers = [...staticHandlers(), [/push\.example/, () => new Response(null, { status: 201 })], [/ndlsearch/, () => new Response(sampleXml)], [/api\.calil\.jp/, () => new Response('boom', { status: 503 })]];
   const res = await W.route(post('/api/availability', { items: [{ id: 'k-2A-01' }], fresh: true }), env, { fetch: fakeFetch(handlers), sleep: noSleep });
   const body = await res.json();
   for (const lib of ['kita-chuo', 'kita-higashijujo']) {
@@ -193,7 +211,7 @@ await t('定期チェック: 貸出中→在架を1回だけ通知し、在架�
   assert.equal(sync.ok, true);
   let state = '貸出中';
   const handlers = () => [
-    ...staticHandlers(), [/ndlsearch/, () => new Response(sampleXml)],
+    ...staticHandlers(), [/push\.example/, () => new Response(null, { status: 201 })], [/ndlsearch/, () => new Response(sampleXml)],
     [/api\.calil\.jp\/check/, () => jres({ continue: 0, books: { 9784834000825: { Tokyo_Kita: { status: 'OK', libkey: { 中央: state, 東十条: '貸出中' } } } } })],
   ];
   const run = async (s) => { state = s; const ctx = { env, fetch: fakeFetch(handlers()), sleep: noSleep, budget: { left: 40, use() { if (this.left-- <= 0) throw new Error('budget'); } } }; return W.runScheduled(ctx); };
@@ -214,7 +232,7 @@ await t('定期チェック中に通信失敗(不明)が挟まっても誤通知
   await W.route(post('/api/sync', { subscription: { endpoint: 'https://push.example/zzz' }, favorites: [{ id: 'k-2A-01', title: 'ぐりとぐら' }], libs: ['kita-chuo'] }), env, { fetch: fakeFetch(staticHandlers()), sleep: noSleep });
   let mode = 'lent';
   const handlers = () => [
-    ...staticHandlers(), [/ndlsearch/, () => new Response(sampleXml)],
+    ...staticHandlers(), [/push\.example/, () => new Response(null, { status: 201 })], [/ndlsearch/, () => new Response(sampleXml)],
     [/api\.calil\.jp\/check/, () => mode === 'down' ? new Response('x', { status: 500 }) : jres({ continue: 0, books: { 9784834000825: { Tokyo_Kita: { status: 'OK', libkey: { 中央: mode === 'lent' ? '貸出中' : '貸出可' } } } } })],
   ];
   const run = async () => W.runScheduled({ env, fetch: fakeFetch(handlers()), sleep: noSleep, budget: { left: 40, use() { if (this.left-- <= 0) throw new Error('budget'); } } });

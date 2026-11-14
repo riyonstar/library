@@ -607,7 +607,7 @@ async function updatePushUi() {
   if (!st) return;
   let msg = '', btns = '';
   if (useMock()) msg = '🧪 モックモード中は、実際のプッシュ通知は送られません(アプリ内通知の動作確認のみ)。';
-  else if (!HAS_BACKEND || !CFG.VAPID_PUBLIC_KEY) msg = 'プッシュ通知には、バックエンドと公開鍵(VAPID_PUBLIC_KEY)の設定が必要です。いまは「アプリ内通知」だけ使えます。';
+  else if (!HAS_BACKEND) msg = 'プッシュ通知にはバックエンドの設定(BACKEND_URL)が必要です。いまは「アプリ内通知」だけ使えます。';
   else if (!pushSupported()) msg = isIOS && !isStandalone()
     ? 'iPhoneでは、Safariの共有ボタンから「ホーム画面に追加」して、ホーム画面のアイコンから開くとプッシュ通知を使えます(iOS 16.4以降)。'
     : 'このブラウザはプッシュ通知に対応していません。「アプリ内通知」だけ使えます。';
@@ -627,7 +627,7 @@ async function enablePush() {
     const perm = await Notification.requestPermission();
     if (perm !== 'granted') { toast('通知が許可されませんでした'); updatePushUi(); return; }
     let sub = await reg.pushManager.getSubscription();
-    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(CFG.VAPID_PUBLIC_KEY) });
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8((await api('/api/vapid-public-key', { timeout: 15000 })).key) });
     state.settings.pushOn = true; persist.settings();
     await syncPush(true);
     toast('プッシュ通知をオンにしました');
@@ -671,11 +671,17 @@ async function pingBackend() {
 
 /* ================= 起動 ================= */
 async function loadData() {
-  let d = self.APP_DATA;
-  if (!d) { // data.js が無いとき(GitHub Pages等)は JSON を直接読む
-    const [books, libraries] = await Promise.all([fetch('books.json').then((r) => r.json()), fetch('libraries.json').then((r) => r.json())]);
-    d = { books, libraries };
+  let d = null;
+  // 公開(http/https)時は JSON を直接読む → books.json / libraries.json を編集するだけで反映される(data.js の再生成は不要)
+  if (/^https?:$/.test(location.protocol)) {
+    try {
+      const [books, libraries] = await Promise.all([fetch('books.json').then((r) => r.json()), fetch('libraries.json').then((r) => r.json())]);
+      d = { books, libraries };
+    } catch { d = null; }
   }
+  // index.html を直接開いたとき(file://)や読み込み失敗時は data.js を使う
+  if (!d) d = self.APP_DATA;
+  if (!d) throw new Error('data');
   BOOKS = d.books.books; LIBS = d.libraries.libraries; PROVIDER = d.libraries.provider || {};
   BOOKS.forEach((b) => { b._n = norm([b.title, b.searchTitle, b.author, (b.contributors || []).join(' '), b.publisher].join(' ')); });
   BOOK_BY_ID = new Map(BOOKS.map((b) => [b.id, b]));

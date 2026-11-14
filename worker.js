@@ -10,8 +10,8 @@
  *  4. Web Push(ペイロードなし/VAPID)で端末を起こし、端末側(Service Worker)が通知本文を取りに来る
  *
  * 必要な設定(README参照)
- *   シークレット : CALIL_APPKEY, VAPID_PRIVATE_KEY
- *   変数         : VAPID_PUBLIC_KEY, VAPID_SUBJECT, ALLOWED_ORIGIN, BOOKS_URL, LIBRARIES_URL
+ *   シークレット : CALIL_APPKEY のみ(Cloudflareの画面で登録)。VAPID鍵は初回に自動生成されKVにだけ保存される
+ *   変数         : VAPID_SUBJECT, ALLOWED_ORIGIN, BOOKS_URL, LIBRARIES_URL
  *   KV           : KV
  *
  * 重要な方針
@@ -505,19 +505,38 @@ export async function vapidJwt(env, audience, now = Math.floor(Date.now() / 1000
   const key = await crypto.subtle.importKey('jwk', jwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
   const te = new TextEncoder();
   const header = b64urlEncode(te.encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
-  const payload = b64urlEncode(te.encode(JSON.stringify({ aud: audience, exp: now + 12 * 3600, sub: env.VAPID_SUBJECT || 'mailto:admin@example.com' })));
+  const payload = b64urlEncode(te.encode(JSON.stringify({ aud: audience, exp: now + 12 * 3600, sub: env.VAPID_SUBJECT || 'https://example.com' })));
   const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, te.encode(`${header}.${payload}`));
   return `${header}.${payload}.${b64urlEncode(new Uint8Array(sig))}`;
 }
 
+/**
+ * VAPID鍵の取得。環境変数(任意)があればそれを使い、無ければ Cloudflare KV から取得。
+ * KV にも無ければ初回だけ Worker 内で生成して KV にのみ保存する。
+ * → 秘密鍵は Cloudflare の外(GitHub・端末・チャット)に一度も出ない。人が扱う必要もない。
+ */
+export async function getVapid(ctx, { create = true } = {}) {
+  const e = ctx.env;
+  if (e.VAPID_PRIVATE_KEY && e.VAPID_PUBLIC_KEY) return { pub: e.VAPID_PUBLIC_KEY, priv: e.VAPID_PRIVATE_KEY };
+  const saved = await e.KV.get('vapid-keys', 'json');
+  if (saved?.pub && saved?.priv) return saved;
+  if (!create) return null;
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const jwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
+  const raw = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
+  const v = { pub: b64urlEncode(raw), priv: jwk.d };
+  await e.KV.put('vapid-keys', JSON.stringify(v));
+  return v;
+}
+
 async function sendPush(ctx, sub) {
-  if (!ctx.env.VAPID_PRIVATE_KEY || !ctx.env.VAPID_PUBLIC_KEY) return { ok: false, reason: 'vapid_not_configured' };
+  const v = await getVapid(ctx);
   const aud = new URL(sub.endpoint).origin;
-  const jwt = await vapidJwt(ctx.env, aud);
+  const jwt = await vapidJwt({ VAPID_PUBLIC_KEY: v.pub, VAPID_PRIVATE_KEY: v.priv, VAPID_SUBJECT: ctx.env.VAPID_SUBJECT || String(ctx.env.ALLOWED_ORIGIN || '').split(',')[0].trim() }, aud);
   ctx.budget.use();
   const res = await ctx.fetch(sub.endpoint, {
     method: 'POST',
-    headers: { TTL: '86400', Urgency: 'normal', Authorization: `vapid t=${jwt}, k=${ctx.env.VAPID_PUBLIC_KEY}`, 'Content-Length': '0' },
+    headers: { TTL: '86400', Urgency: 'normal', Authorization: `vapid t=${jwt}, k=${v.pub}`, 'Content-Length': '0' },
   });
   return { ok: res.status >= 200 && res.status < 300, gone: res.status === 404 || res.status === 410, status: res.status };
 }
@@ -575,7 +594,7 @@ async function handleHealth(ctx) {
     time: nowIso(),
     config: {
       calilKey: !!ctx.env.CALIL_APPKEY,
-      vapid: !!(ctx.env.VAPID_PRIVATE_KEY && ctx.env.VAPID_PUBLIC_KEY),
+      vapid: !!(await getVapid(ctx, { create: false })),
       booksUrl: !!ctx.env.BOOKS_URL,
       librariesUrl: !!ctx.env.LIBRARIES_URL,
       allowedOrigin: ctx.env.ALLOWED_ORIGIN || null,
@@ -681,6 +700,7 @@ export async function route(req, env, over = {}) {
     let res;
     if (url.pathname === '/api/health' && req.method === 'GET') res = await handleHealth(ctx);
     else if (url.pathname === '/api/availability' && req.method === 'POST') res = await handleAvailability(ctx, req);
+    else if (url.pathname === '/api/vapid-public-key' && req.method === 'GET') res = json({ key: (await getVapid(ctx)).pub });
     else if (url.pathname === '/api/search' && req.method === 'GET') res = await handleSearch(ctx, req);
     else if (url.pathname === '/api/sync' && req.method === 'POST') res = await handleSync(ctx, req);
     else if (url.pathname === '/api/unsubscribe' && req.method === 'POST') res = await handleUnsubscribe(ctx, req);

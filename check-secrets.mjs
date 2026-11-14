@@ -1,11 +1,11 @@
 // 秘密情報がファイルに直書きされていないかを確認します。  実行: node check-secrets.mjs
-// 公開(git push)の前に毎回実行してください。GitHub Actions でも自動実行されます。
+// 手元で実行するのは任意です(ターミナル不要)。GitHub Actions(check.yml)が push のたびに自動実行します。
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dir = dirname(fileURLToPath(import.meta.url));
-const SKIP_FILES = new Set(['check-secrets.mjs', 'test-worker.mjs', 'SECRETS.md', 'README.md', 'data.js', 'books.json']);
+const SKIP_FILES = new Set(['check-secrets.mjs', 'test-worker.mjs', 'SECRETS.md', 'README.md', 'IPHONE-SETUP.md', 'data.js', 'books.json']);
 const SKIP_DIRS = new Set(['node_modules', '.git', '.wrangler']);
 const TEXT = /\.(js|mjs|json|html|css|toml|md|yml|yaml|txt|py|example)$|^\.(gitignore|dev\.vars)$/;
 
@@ -15,6 +15,7 @@ const RULES = [
   [/appkey=[0-9A-Za-z]{16,}/i, 'URLにAPIキーらしき値があります'],
   [/"d"\s*:\s*"[A-Za-z0-9_-]{43}"/, 'ECの秘密鍵(JWKのd)らしき値があります'],
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, '秘密鍵ファイルの内容があります'],
+  [/(?:VAPID|APPKEY|API_?KEY|SECRET|TOKEN)[A-Z_]*\s*[:=]\s*["']?[A-Za-z0-9_\-]{32,}/i, 'キー/トークンらしき長い値が代入されています'],
 ];
 
 const problems = [];
